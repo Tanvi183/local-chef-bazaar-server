@@ -27,6 +27,7 @@ async function run() {
     const db = client.db("local_chef_bazaar_db");
     const userCollection = db.collection("users");
     const roleRequestCollection = db.collection("roleRequests");
+    const MealsCollection = db.collection("Meals");
 
     // Users Related Api's
     app.post("/users", async (req, res) => {
@@ -79,7 +80,22 @@ async function run() {
       const email = req.params.email;
       const query = { email };
       const user = await userCollection.findOne(query);
-      res.send({ role: user?.role || "user" });
+      res.send({
+        role: user?.role || "user",
+        status: user?.status || "active",
+      });
+    });
+
+    // Update user status fraud
+    app.patch("/users/fraud/:id", async (req, res) => {
+      const { id } = req.params;
+      const query = { _id: new ObjectId(id) };
+
+      const result = await userCollection.updateOne(query, {
+        $set: { status: "fraud" },
+      });
+
+      res.send(result);
     });
 
     // request to change the role
@@ -183,13 +199,19 @@ async function run() {
         );
 
         if (requestStatus === "approved") {
+          const updateDoc = {
+            role: result.requestType,
+            requestStatus: "approved",
+          };
+
+          if (result.requestType === "chef") {
+            updateDoc.chefId = `CHEF-${Date.now()}`;
+          }
+
           await userCollection.updateOne(
             { email: result.userEmail },
             {
-              $set: {
-                role: result.requestType,
-                requestStatus: "approved",
-              },
+              $set: updateDoc,
               $unset: {
                 requestedRole: "",
               },
@@ -219,6 +241,82 @@ async function run() {
         console.error("Role request update error:", error);
         res.status(500).send({ message: "Internal server error" });
       }
+    });
+
+    // Meals Related Api's
+    app.post("/meals", async (req, res) => {
+      try {
+        const meal = req.body;
+
+        // user is a chef or not
+        const user = await userCollection.findOne({
+          email: meal.userEmail,
+          role: "chef",
+          chefId: meal.chefId,
+        });
+
+        if (!user) {
+          return res.status(403).send({
+            success: false,
+            message: "Only chefs can create meals",
+          });
+        }
+
+        const newMeal = {
+          foodName: meal.foodName,
+          foodImage: meal.foodImage,
+          chefName: user.displayName,
+          chefId: user.chefId,
+          userEmail: user.email,
+          price: Number(meal.price),
+          rating: Number(meal.rating || 0),
+          ingredients: meal.ingredients,
+          estimatedDeliveryTime: meal.estimatedDeliveryTime || "",
+          chefExperience: meal.chefExperience || "",
+          createdAt: new Date(),
+          status: "available",
+        };
+
+        const result = await MealsCollection.insertOne(newMeal);
+
+        res.status(201).send({
+          success: true,
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Create meal error:", error);
+        res.status(500).send({
+          success: false,
+          message: "Internal server error",
+        });
+      }
+    });
+
+    // Get meals by chef
+    app.get("/meals", async (req, res) => {
+      const { userEmail } = req.query;
+      const query = userEmail ? { userEmail } : {};
+      const meals = await MealsCollection.find(query).toArray();
+      res.send(meals);
+    });
+
+    // Delete meal
+    app.delete("/meals/:id", async (req, res) => {
+      const { id } = req.params;
+      const query = { _id: new ObjectId(id) };
+      const result = await MealsCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    // Update meal
+    app.put("/meals/:id", async (req, res) => {
+      const { id } = req.params;
+      const updatedData = req.body;
+      const result = await MealsCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: updatedData }
+      );
+      res.send(result);
     });
 
     // Send a ping to confirm a successful connection
