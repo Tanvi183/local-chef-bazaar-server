@@ -28,6 +28,7 @@ async function run() {
     const userCollection = db.collection("users");
     const roleRequestCollection = db.collection("roleRequests");
     const MealsCollection = db.collection("Meals");
+    const ReviewsCollection = db.collection("reviews");
 
     // Users Related Api's
     app.post("/users", async (req, res) => {
@@ -269,6 +270,7 @@ async function run() {
           price: Number(meal.price),
           rating: Number(meal.rating || 0),
           ingredients: meal.ingredients,
+          deliveryArea: meal.deliveryArea || [],
           estimatedDeliveryTime: meal.estimatedDeliveryTime || "",
           chefExperience: meal.chefExperience || "",
           createdAt: new Date(),
@@ -315,6 +317,23 @@ async function run() {
         { $set: updatedData }
       );
       res.send(result);
+    });
+
+    // Get single meal by ID
+    app.get("/meals/:id", async (req, res) => {
+      try {
+        const mealId = req.params.id;
+
+        const meal = await MealsCollection.findOne({
+          _id: new ObjectId(mealId),
+        });
+
+        res.send({ success: true, meal });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
     });
 
     // Send a ping to confirm a successful connection
