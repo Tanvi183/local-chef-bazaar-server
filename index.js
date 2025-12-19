@@ -165,9 +165,7 @@ async function run() {
     // Admin: all requests
     app.get("/role-requests/all", async (req, res) => {
       const result = await roleRequestCollection
-        .find({
-          requestStatus: "pending",
-        })
+        .find({})
         .sort({ createdAt: -1 })
         .toArray();
 
