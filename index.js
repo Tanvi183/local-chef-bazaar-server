@@ -29,6 +29,7 @@ async function run() {
     const roleRequestCollection = db.collection("roleRequests");
     const MealsCollection = db.collection("Meals");
     const ReviewsCollection = db.collection("reviews");
+    const FavoritesCollection = db.collection("favorites");
 
     // Users Related Api's
     app.post("/users", async (req, res) => {
@@ -333,6 +334,263 @@ async function run() {
         res
           .status(500)
           .send({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // Review Related Api's
+    app.get("/reviews/home", async (req, res) => {
+      try {
+        const reviews = await ReviewsCollection.aggregate([
+          { $match: { rating: { $gte: 4 } } },
+          { $sample: { size: 4 } },
+        ]).toArray();
+        res.send(reviews);
+      } catch (error) {
+        res.status(500).send({
+          message: "Failed to load home reviews",
+        });
+      }
+    });
+
+    //user wise Review
+    app.get("/my-reviews", async (req, res) => {
+      try {
+        const { email } = req.query;
+
+        const reviews = await ReviewsCollection.aggregate([
+          { $match: { userEmail: email.toLowerCase().trim() } },
+          {
+            $addFields: {
+              foodObjectId: {
+                $cond: [
+                  { $eq: [{ $type: "$foodId" }, "string"] },
+                  { $toObjectId: "$foodId" },
+                  "$foodId",
+                ],
+              },
+            },
+          },
+
+          {
+            $lookup: {
+              from: "meals",
+              localField: "foodObjectId",
+              foreignField: "_id",
+              as: "meal",
+            },
+          },
+
+          { $unwind: { path: "$meal", preserveNullAndEmptyArrays: true } },
+
+          {
+            $project: {
+              rating: 1,
+              comment: 1,
+              date: 1,
+              mealName: { $ifNull: ["$meal.foodName", "Meal Deleted"] },
+            },
+          },
+
+          { $sort: { date: -1 } },
+        ]).toArray();
+
+        res.send(reviews);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to load reviews" });
+      }
+    });
+
+    //Update Review
+    app.patch("/reviews/:id", async (req, res) => {
+      const { rating, comment } = req.body;
+
+      const result = await ReviewsCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        {
+          $set: {
+            rating: Number(rating),
+            comment,
+            date: new Date(),
+          },
+        }
+      );
+
+      res.send({ success: result.modifiedCount > 0 });
+    });
+
+    // delete review
+    app.delete("/reviews/:id", async (req, res) => {
+      const result = await ReviewsCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+
+      res.send({ success: result.deletedCount > 0 });
+    });
+
+    // Add Review for a meal
+    app.post("/meals/:mealId/review", async (req, res) => {
+      try {
+        const { mealId } = req.params;
+        const { userEmail, reviewerName, reviewerImage, rating, comment } =
+          req.body;
+
+        // Check user reviewed exist
+        const existingReview = await ReviewsCollection.findOne({
+          foodId: mealId,
+          userEmail,
+        });
+
+        if (existingReview) {
+          return res.status(400).send({
+            success: false,
+            message: "You have already reviewed this meal",
+          });
+        }
+
+        const newReview = {
+          foodId: mealId,
+          userEmail,
+          reviewerName,
+          reviewerImage,
+          rating: Number(rating),
+          comment,
+          date: new Date(),
+        };
+
+        await ReviewsCollection.insertOne(newReview);
+
+        res.send({
+          success: true,
+          message: "Review submitted successfully!",
+          review: newReview,
+        });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // Get all reviews for a meal
+    app.get("/meals/:mealId/reviews", async (req, res) => {
+      try {
+        const { mealId } = req.params;
+        const reviews = await ReviewsCollection.find({ foodId: mealId })
+          .sort({ date: -1 })
+          .toArray();
+
+        res.send({ success: true, reviews });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // Favorites related api's
+    app.post("/favorites", async (req, res) => {
+      try {
+        const { userEmail, mealId, mealName, chefId, chefName, price } =
+          req.body;
+
+        const existing = await FavoritesCollection.findOne({
+          userEmail,
+          mealId,
+        });
+        if (existing) {
+          return res.status(400).send({
+            success: false,
+            message: "Meal already in favorites",
+          });
+        }
+
+        const favorite = {
+          userEmail,
+          mealId,
+          mealName,
+          chefId,
+          chefName,
+          price,
+          addedTime: new Date(),
+        };
+
+        await FavoritesCollection.insertOne(favorite);
+
+        res.send({
+          success: true,
+          message: "Meal added to favorites!",
+          favorite,
+        });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Internal server error" });
+      }
+    });
+
+    // Get favorites for logged-in user
+    app.get("/favorites", async (req, res) => {
+      try {
+        const { email } = req.query;
+        if (!email) return res.status(400).send({ message: "Email required" });
+
+        const favorites = await FavoritesCollection.aggregate([
+          { $match: { userEmail: email.toLowerCase().trim() } },
+
+          // Optional: populate meal info if needed
+          {
+            $lookup: {
+              from: "meals",
+              localField: "mealId",
+              foreignField: "_id",
+              as: "meal",
+            },
+          },
+          { $unwind: { path: "$meal", preserveNullAndEmptyArrays: true } },
+
+          {
+            $project: {
+              mealName: { $ifNull: ["$mealName", "$meal.foodName"] },
+              chefName: 1,
+              price: 1,
+              addedTime: 1,
+            },
+          },
+
+          { $sort: { addedTime: -1 } },
+        ]).toArray();
+
+        res.send(favorites);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Failed to load favorites" });
+      }
+    });
+
+    // Delete favorite
+    app.delete("/favorites/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        const result = await FavoritesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        if (result.deletedCount === 1) {
+          return res.send({
+            success: true,
+            message: "Meal removed from favorites successfully.",
+          });
+        }
+
+        res
+          .status(404)
+          .send({ success: false, message: "Favorite meal not found." });
+      } catch (error) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to delete favorite." });
       }
     });
 
