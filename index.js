@@ -301,6 +301,15 @@ async function run() {
       res.send(meals);
     });
 
+    // home page meals api
+    app.get("/meals/home", async (req, res) => {
+      const meals = await MealsCollection.find()
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .toArray();
+      res.send(meals);
+    });
+
     // Delete meal
     app.delete("/meals/:id", async (req, res) => {
       const { id } = req.params;
