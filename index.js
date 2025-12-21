@@ -30,6 +30,7 @@ async function run() {
     const MealsCollection = db.collection("Meals");
     const ReviewsCollection = db.collection("reviews");
     const FavoritesCollection = db.collection("favorites");
+    const OrdersCollection = db.collection("orders");
 
     // Users Related Api's
     app.post("/users", async (req, res) => {
@@ -382,7 +383,7 @@ async function run() {
 
           {
             $lookup: {
-              from: "meals",
+              from: "Meals",
               localField: "foodObjectId",
               foreignField: "_id",
               as: "meal",
@@ -600,6 +601,82 @@ async function run() {
         res
           .status(500)
           .send({ success: false, message: "Failed to delete favorite." });
+      }
+    });
+
+    // Order Related Api's
+    app.post("/orders", async (req, res) => {
+      const { userEmail } = req.body;
+
+      const user = await userCollection.findOne({ email: userEmail });
+
+      if (user?.status !== "active") {
+        return res.status(403).send({
+          success: false,
+          message: "User account is not active",
+        });
+      }
+
+      req.body.orderStatus = "pending";
+      req.body.paymentStatus = "Pending";
+      req.body.orderTime = new Date();
+
+      const result = await OrdersCollection.insertOne(req.body);
+
+      res.send({ success: true, result });
+    });
+
+    app.get("/orders", async (req, res) => {
+      try {
+        const { email } = req.query;
+
+        const orders = await OrdersCollection.aggregate([
+          { $match: { userEmail: email.toLowerCase().trim() } },
+          {
+            $addFields: {
+              foodObjectId: {
+                $cond: [
+                  { $eq: [{ $type: "$foodId" }, "string"] },
+                  { $toObjectId: "$foodId" },
+                  "$foodId",
+                ],
+              },
+            },
+          },
+          {
+            $lookup: {
+              from: "Meals",
+              localField: "foodObjectId",
+              foreignField: "_id",
+              as: "meal",
+            },
+          },
+          {
+            $unwind: {
+              path: "$meal",
+              preserveNullAndEmptyArrays: true,
+            },
+          },
+          {
+            $project: {
+              foodName: "$meal.mealName",
+              deliveryTime: "$meal.estimatedDeliveryTime",
+              chefName: "$meal.chefName",
+              chefId: "$meal.chefId",
+              price: 1,
+              quantity: 1,
+              orderStatus: 1,
+              paymentStatus: 1,
+              createdAt: 1,
+            },
+          },
+
+          { $sort: { createdAt: -1 } },
+        ]).toArray();
+
+        res.send(orders);
+      } catch {
+        res.status(500).send({ message: "Failed to fetch orders" });
       }
     });
 
