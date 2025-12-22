@@ -328,6 +328,39 @@ async function run() {
       res.send(meals);
     });
 
+    // for pagination
+    app.get("/meals-paginated", async (req, res) => {
+      try {
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 8;
+        const sort = req.query.sort || "asc";
+        const search = req.query.search || "";
+
+        const skip = (page - 1) * limit;
+
+        const query = search
+          ? { foodName: { $regex: search, $options: "i" } }
+          : {};
+
+        const totalMeals = await MealsCollection.countDocuments(query);
+
+        const meals = await MealsCollection.find(query)
+          .skip(skip)
+          .limit(limit)
+          .sort({ price: sort === "asc" ? 1 : -1 })
+          .toArray();
+
+        res.send({
+          meals,
+          totalMeals,
+          totalPages: Math.ceil(totalMeals / limit),
+          currentPage: page,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch meals" });
+      }
+    });
+
     // home page meals api
     app.get("/meals/home", async (req, res) => {
       const meals = await MealsCollection.find()
