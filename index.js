@@ -4,6 +4,8 @@ const app = express();
 require("dotenv").config();
 const port = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+// stripe connection
+const stripe = require("stripe")(process.env.STRIPE_SECRET);
 
 // Middleware
 app.use(express.json());
@@ -31,6 +33,7 @@ async function run() {
     const ReviewsCollection = db.collection("reviews");
     const FavoritesCollection = db.collection("favorites");
     const OrdersCollection = db.collection("orders");
+    const PaymentsCollection = db.collection("payments");
 
     // Users Related Api's
     app.post("/users", async (req, res) => {
@@ -663,6 +666,8 @@ async function run() {
               deliveryTime: "$meal.estimatedDeliveryTime",
               chefName: "$meal.chefName",
               chefId: "$meal.chefId",
+              userEmail: 1,
+              mealName: 1,
               price: 1,
               quantity: 1,
               orderStatus: 1,
@@ -677,6 +682,190 @@ async function run() {
         res.send(orders);
       } catch {
         res.status(500).send({ message: "Failed to fetch orders" });
+      }
+    });
+
+    // order-requests
+    app.get("/chef/orders", async (req, res) => {
+      try {
+        const { chefId } = req.query;
+
+        const orders = await OrdersCollection.find({ chefId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(orders);
+      } catch {
+        res.status(500).send({ message: "Failed to fetch orders" });
+      }
+    });
+
+    app.patch("/orders/:id/status", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+        const query = { _id: new ObjectId(id) };
+
+        const order = await OrdersCollection.findOne(query);
+
+        if (
+          order.orderStatus === "cancelled" ||
+          order.orderStatus === "delivered"
+        ) {
+          return res.status(400).send({ message: "Order cannot be updated" });
+        }
+
+        if (status === "accepted" && order.orderStatus !== "pending") {
+          return res.status(400).send({ message: "Invalid transition" });
+        }
+
+        if (status === "delivered" && order.orderStatus !== "accepted") {
+          return res
+            .status(400)
+            .send({ message: "Order must be accepted first" });
+        }
+
+        await OrdersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { orderStatus: status } }
+        );
+
+        res.send({ message: "Order updated" });
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Update failed" });
+      }
+    });
+
+    // payment related apis ( Stripe )
+    app.post("/create-checkout-session", async (req, res) => {
+      try {
+        const paymentInfo = req.body;
+        const price = Number(paymentInfo.price);
+        const quantity = Number(paymentInfo.quantity);
+        const amount = Math.round(price * quantity * 100);
+
+        const session = await stripe.checkout.sessions.create({
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                unit_amount: amount,
+                product_data: {
+                  name: `Please pay for: ${paymentInfo.mealName}`,
+                },
+              },
+              quantity: 1,
+            },
+          ],
+          mode: "payment",
+          metadata: {
+            orderId: paymentInfo.orderId,
+            mealName: paymentInfo.mealName,
+          },
+          customer_email: paymentInfo.customerEmail,
+          success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.SITE_DOMAIN}/dashboard/my-orders`,
+        });
+
+        // console.log("Stripe session created:", session);
+        res.send({ url: session.url });
+      } catch (err) {
+        // console.error("Stripe error:", err);
+        res.status(500).send({
+          message: "Stripe session creation failed",
+          error: err.message,
+        });
+      }
+    });
+
+    app.patch("/payment-success", async (req, res) => {
+      try {
+        const sessionId = req.query.session_id;
+
+        // Session id is avaiable or not
+        if (!sessionId) {
+          return res.send({ success: false, message: "No session ID" });
+        }
+
+        // Retrieve Stripe session
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        // console.log("session retrieve", session);
+
+        if (!session || session.payment_status !== "paid") {
+          return res.send({
+            success: false,
+            message: "Invalid or unpaid session",
+          });
+        }
+
+        const transactionId = session.payment_intent;
+        const orderId = session.metadata?.orderId;
+
+        if (!transactionId || !orderId) {
+          return res.send({ success: false, message: "Missing metadata" });
+        }
+
+        // Check  exists or not
+        const existingPayment = await PaymentsCollection.findOne({
+          transactionId,
+        });
+
+        if (existingPayment) {
+          return res.send({
+            success: true,
+            message: "Payment already processed",
+            paymentInfo: existingPayment,
+          });
+        }
+
+        // payment status Check
+        const order = await OrdersCollection.findOne({
+          _id: new ObjectId(orderId),
+        });
+
+        if (order.paymentStatus === "paid") {
+          return res.send({
+            success: true,
+            message: "Order already marked as paid",
+          });
+        }
+
+        await OrdersCollection.updateOne(
+          { _id: new ObjectId(orderId) },
+          {
+            $set: {
+              paymentStatus: "paid",
+              paidAt: new Date(),
+            },
+          }
+        );
+
+        const paymentData = {
+          orderId,
+          transactionId,
+          mealName: session.metadata.mealName,
+          customerEmail: session.customer_email,
+          amount: session.amount_total / 100,
+          currency: session.currency,
+          paymentStatus: session.payment_status,
+          paidAt: new Date(),
+        };
+
+        const paymentInserted = await PaymentsCollection.insertOne(paymentData);
+
+        return res.send({
+          success: true,
+          message: "Payment processed successfully",
+          paymentInfo: paymentInserted,
+        });
+      } catch (error) {
+        // console.error("Payment success error:", error);
+        return res.status(500).send({
+          success: false,
+          message: "Server error",
+          error: error.message,
+        });
       }
     });
 
