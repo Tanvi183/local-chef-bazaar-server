@@ -21,6 +21,16 @@ const client = new MongoClient(uri, {
   },
 });
 
+// Crate Random tracking id
+const crypto = require("crypto");
+function generateTrackingId() {
+  const prefix = "LCB";
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const random = crypto.randomBytes(3).toString("hex").toUpperCase();
+
+  return `${prefix}-${date}-${random}`;
+}
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -34,6 +44,19 @@ async function run() {
     const FavoritesCollection = db.collection("favorites");
     const OrdersCollection = db.collection("orders");
     const PaymentsCollection = db.collection("payments");
+    const trackingsCollection = db.collection("trackings");
+
+    // tracking logged
+    const logTracking = async (trackingId, status) => {
+      const log = {
+        trackingId,
+        status,
+        details: status.split("_").join(" "),
+        createdAt: new Date(),
+      };
+      const result = await trackingsCollection.insertOne(log);
+      return result;
+    };
 
     // Users Related Api's
     app.post("/users", async (req, res) => {
@@ -63,7 +86,7 @@ async function run() {
 
       if (email) {
         const user = await userCollection.findOne({
-          email: email.toLowerCase().trim(),
+          email: email,
         });
 
         if (!user) {
@@ -620,11 +643,16 @@ async function run() {
         });
       }
 
+      const trackingId = generateTrackingId();
+
       req.body.orderStatus = "pending";
       req.body.paymentStatus = "Pending";
       req.body.orderTime = new Date();
+      req.body.trackingId = trackingId;
 
       const result = await OrdersCollection.insertOne(req.body);
+
+      logTracking(trackingId, "order_pending");
 
       res.send({ success: true, result });
     });
