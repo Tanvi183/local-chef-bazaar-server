@@ -712,17 +712,15 @@ async function run() {
           order.orderStatus === "cancelled" ||
           order.orderStatus === "delivered"
         ) {
-          return res.status(400).send({ message: "Order cannot be updated" });
+          return res.send({ message: "Order cannot be updated" });
         }
 
         if (status === "accepted" && order.orderStatus !== "pending") {
-          return res.status(400).send({ message: "Invalid transition" });
+          return res.send({ message: "Invalid transition" });
         }
 
         if (status === "delivered" && order.orderStatus !== "accepted") {
-          return res
-            .status(400)
-            .send({ message: "Order must be accepted first" });
+          return res.send({ message: "Order must be accepted first" });
         }
 
         await OrdersCollection.updateOne(
@@ -732,8 +730,8 @@ async function run() {
 
         res.send({ message: "Order updated" });
       } catch (err) {
-        console.error(err);
-        res.status(500).send({ message: "Update failed" });
+        // console.error(err);
+        res.send({ message: "Update failed" });
       }
     });
 
@@ -866,6 +864,31 @@ async function run() {
           message: "Server error",
           error: error.message,
         });
+      }
+    });
+
+    app.get("/payments", async (req, res) => {
+      try {
+        const { email, role } = req.query;
+
+        let query = {};
+
+        if (role === "admin") {
+          query = {};
+        } else {
+          if (!email) {
+            return res.status(400).send({ message: "Email required" });
+          }
+          query.customerEmail = email;
+        }
+
+        const payments = await PaymentsCollection.find(query)
+          .sort({ paidAt: -1 })
+          .toArray();
+
+        res.send(payments);
+      } catch (error) {
+        res.status(500).send({ message: "Server error" });
       }
     });
 
