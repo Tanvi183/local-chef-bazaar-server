@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const app = express();
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
 const port = process.env.PORT || 3000;
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 // stripe connection
@@ -10,6 +11,30 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET);
 // Middleware
 app.use(express.json());
 app.use(cors());
+
+// use jwt token to verify user's
+const verifyJWTToken = (req, res, next) => {
+  const authorization = req.headers.authorization;
+  if (!authorization) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+
+  const token = authorization.split(" ")[1];
+  if (!token) {
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).send({ message: "Forbidden" });
+    }
+    // put it in the right place
+    // console.log("after decoded", decoded);
+    req.token_email = decoded.email;
+
+    next();
+  });
+};
 
 // use Credentials and Create mongoClient Connect
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@simple-crud-server.7fhuvu7.mongodb.net/?appName=simple-crud-server`;
@@ -46,6 +71,15 @@ async function run() {
     const PaymentsCollection = db.collection("payments");
     const trackingsCollection = db.collection("trackings");
 
+    // JWT related api
+    app.post("/getToken", (req, res) => {
+      const loggedUser = req.body;
+      const token = jwt.sign(loggedUser, process.env.JWT_SECRET, {
+        expiresIn: "1h",
+      });
+      res.send({ token: token });
+    });
+
     // tracking logged
     const logTracking = async (trackingId, status) => {
       const log = {
@@ -81,27 +115,37 @@ async function run() {
       }
     });
 
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyJWTToken, async (req, res) => {
       const { email } = req.query;
+      const requesterEmail = req.token_email;
+      // console.log(requesterEmail);
 
-      if (email) {
-        const user = await userCollection.findOne({
-          email: email,
-        });
+      try {
+        if (email) {
+          if (email !== requesterEmail) {
+            return res.json({
+              message: "Forbidden: Cannot access other users",
+            });
+          }
 
-        if (!user) {
-          return res.status(404).send({ message: "User not found" });
+          const user = await userCollection.findOne({ email });
+
+          if (!user) {
+            return res.status(404).send({ message: "User not found" });
+          }
+          return res.send(user);
         }
 
-        return res.send(user);
+        // admin: get all users
+        const users = await userCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+        return res.send(users);
+      } catch (err) {
+        console.error(err);
+        return res.status(500).send({ message: "Server error" });
       }
-
-      // admin: get all users
-      const users = await userCollection
-        .find({}, { sort: { createdAt: -1 } })
-        .toArray();
-
-      res.send(users);
     });
 
     // role wise users
