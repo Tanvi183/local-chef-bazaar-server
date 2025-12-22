@@ -315,7 +315,7 @@ async function run() {
     });
 
     // Meals Related Api's
-    app.post("/meals", async (req, res) => {
+    app.post("/meals", verifyJWTToken, async (req, res) => {
       try {
         const meal = req.body;
 
@@ -365,8 +365,16 @@ async function run() {
     });
 
     // Get meals by chef
-    app.get("/meals", async (req, res) => {
+    app.get("/meals", verifyJWTToken, async (req, res) => {
       const { userEmail } = req.query;
+      const requesterEmail = req.token_email;
+
+      if (userEmail !== requesterEmail) {
+        return res.json({
+          message: "Forbidden: Cannot access other users",
+        });
+      }
+
       const query = userEmail ? { userEmail } : {};
       const meals = await MealsCollection.find(query).toArray();
       res.send(meals);
@@ -415,7 +423,7 @@ async function run() {
     });
 
     // Delete meal
-    app.delete("/meals/:id", async (req, res) => {
+    app.delete("/meals/:id", verifyJWTToken, async (req, res) => {
       const { id } = req.params;
       const query = { _id: new ObjectId(id) };
       const result = await MealsCollection.deleteOne(query);
@@ -423,7 +431,7 @@ async function run() {
     });
 
     // Update meal
-    app.put("/meals/:id", async (req, res) => {
+    app.put("/meals/:id", verifyJWTToken, async (req, res) => {
       const { id } = req.params;
       const updatedData = req.body;
       const result = await MealsCollection.updateOne(
@@ -734,7 +742,7 @@ async function run() {
       res.send({ success: true, result });
     });
 
-    app.get("/orders", async (req, res) => {
+    app.get("/orders", verifyJWTToken, async (req, res) => {
       try {
         const { email } = req.query;
 
