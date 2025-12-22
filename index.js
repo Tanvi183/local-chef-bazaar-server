@@ -685,6 +685,21 @@ async function run() {
       }
     });
 
+    // GET all orders
+    app.get("/orders/all", async (req, res) => {
+      try {
+        const role = req.query.role;
+        if (role !== "admin") {
+          return res.status(403).send({ message: "forbidden" });
+        }
+
+        const orders = await OrdersCollection.find({}).toArray();
+        res.send(orders);
+      } catch (error) {
+        res.status(500).send({ message: "Server error" });
+      }
+    });
+
     // order-requests
     app.get("/chef/orders", async (req, res) => {
       try {
